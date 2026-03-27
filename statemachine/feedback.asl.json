@@ -1,0 +1,146 @@
+{
+  "Comment": "Customer feedback triage workflow",
+  "StartAt": "ValidateAndRedact",
+  "States": {
+    "ValidateAndRedact": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ValidateRedactFunctionArn}",
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "OutputPath": "$.Payload",
+      "Next": "ProcessRecords"
+    },
+    "ProcessRecords": {
+      "Type": "Map",
+      "ItemsPath": "$.records",
+      "MaxConcurrency": 10,
+      "Iterator": {
+        "StartAt": "ClassifyAndDraft",
+        "States": {
+          "ClassifyAndDraft": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${ClassifyDraftFunctionArn}",
+              "Payload.$": "$"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "OutputPath": "$.Payload",
+            "Next": "NeedsHumanReview?"
+          },
+          "NeedsHumanReview?": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Or": [
+                  {
+                    "Variable": "$.sentiment",
+                    "StringEquals": "Urgent"
+                  },
+                  {
+                    "Variable": "$.confidence",
+                    "NumericLessThan": 0.8
+                  }
+                ],
+                "Next": "CreateHumanReview"
+              }
+            ],
+            "Default": "PersistAutoResult"
+          },
+          "PersistAutoResult": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${PersistResultFunctionArn}",
+              "Payload": {
+                "feedback_id.$": "$.feedback_id",
+                "sentiment.$": "$.sentiment",
+                "confidence.$": "$.confidence",
+                "draft_response.$": "$.draft_response",
+                "final_status": "AUTO_ACCEPTED",
+                "review_id": null
+              }
+            },
+            "OutputPath": "$.Payload",
+            "End": true
+          },
+          "CreateHumanReview": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+            "Parameters": {
+              "FunctionName": "${CreateReviewFunctionArn}",
+              "Payload": {
+                "task_token.$": "$$.Task.Token",
+                "feedback.$": "$"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Next": "PersistReviewedResult"
+          },
+          "PersistReviewedResult": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${PersistResultFunctionArn}",
+              "Payload.$": "$"
+            },
+            "OutputPath": "$.Payload",
+            "End": true
+          }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "FailWorkflow"
+        }
+      ],
+      "Next": "Success"
+    },
+    "FailWorkflow": {
+      "Type": "Fail",
+      "Error": "FeedbackPipelineFailed",
+      "Cause": "Validation or processing error"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}

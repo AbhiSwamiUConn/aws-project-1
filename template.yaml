@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Customer feedback triage pipeline
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: openai.gpt-oss-20b-1:0
+  ConfidenceThreshold:
+    Type: Number
+    Default: 0.80
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 60
+    MemorySize: 512
+    Tracing: Active
+
+Resources:
+  FeedbackBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  QuarantineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  ReviewsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: review_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: review_id
+          KeyType: HASH
+
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: feedback_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: feedback_id
+          KeyType: HASH
+
+  ValidateRedactFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/validate_redact/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          QUARANTINE_BUCKET: !Ref QuarantineBucket
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref FeedbackBucket
+        - S3WritePolicy:
+            BucketName: !Ref QuarantineBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - comprehend:DetectPiiEntities
+              Resource: "*"
+
+  ClassifyDraftFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/classify_draft/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+
+  CreateReviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/create_review/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          REVIEWS_TABLE: !Ref ReviewsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReviewsTable
+
+  SubmitReviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/submit_review/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          REVIEWS_TABLE: !Ref ReviewsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReviewsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:SendTaskSuccess
+                - states:SendTaskFailure
+              Resource: "*"
+
+  PersistResultFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/persist_result/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          RESULTS_TABLE: !Ref ResultsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ResultsTable
+
+  FeedbackStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokePipelineLambdas
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt ValidateRedactFunction.Arn
+                  - !GetAtt ClassifyDraftFunction.Arn
+                  - !GetAtt CreateReviewFunction.Arn
+                  - !GetAtt PersistResultFunction.Arn
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+
+  FeedbackStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: feedback-triage-workflow
+      Role: !GetAtt FeedbackStateMachineRole.Arn
+      DefinitionUri: statemachine/feedback.asl.json
+      DefinitionSubstitutions:
+        ValidateRedactFunctionArn: !GetAtt ValidateRedactFunction.Arn
+        ClassifyDraftFunctionArn: !GetAtt ClassifyDraftFunction.Arn
+        CreateReviewFunctionArn: !GetAtt CreateReviewFunction.Arn
+        PersistResultFunctionArn: !GetAtt PersistResultFunction.Arn
+        ConfidenceThreshold: !Ref ConfidenceThreshold
+
+  EventBridgeInvokeSfnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartStateMachine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !GetAtt FeedbackStateMachine.Arn
+
+  S3ObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Start feedback workflow when a new feedback file lands in incoming/
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref FeedbackBucket
+          object:
+            key:
+              - prefix: incoming/
+      Targets:
+        - Arn: !GetAtt FeedbackStateMachine.Arn
+          Id: FeedbackStateMachineTarget
+          RoleArn: !GetAtt EventBridgeInvokeSfnRole.Arn
+
+Outputs:
+  FeedbackBucketName:
+    Value: !Ref FeedbackBucket
+  QuarantineBucketName:
+    Value: !Ref QuarantineBucket
+  ReviewsTableName:
+    Value: !Ref ReviewsTable
+  ResultsTableName:
+    Value: !Ref ResultsTable
+  FeedbackStateMachineArn:
+    Value: !GetAtt FeedbackStateMachine.Arn

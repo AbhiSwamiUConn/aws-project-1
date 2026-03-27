@@ -1,0 +1,13 @@
+{
+  "records": [
+    {
+      "feedback_id": "f-urgent-002",
+      "customer_id": "c-8888",
+      "product": "Mobile App",
+      "channel": "chat",
+      "created_at": "2026-03-27",
+      "language": "en",
+      "feedback_text": "Your app exposed my personal data to another user. I need immediate action and a formal explanation. This is a serious breach and I will be taking this further if I don’t hear back today."
+    }
+  ]
+}
