@@ -1,5 +1,6 @@
 # aws-project-1
 install aws cli before using the instructions provided here: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+# paste the following into a terminal
 aws login
 python3 -m venv venv
 source venv/bin/activate
