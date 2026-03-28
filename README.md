@@ -8,7 +8,7 @@ pip install -r requirements.txt
 sam build  
 sam deploy  
 # Submit file for review
-aws s3 cp {insert_json_or_csv_file} s3://sam-app-feedbackbucket-6l36mzbhlexz/incoming/{json_or_csv_file}
+aws s3 cp {json_or_csv_file} s3://sam-app-feedbackbucket-6l36mzbhlexz/incoming/{json_or_csv_file}
 # Review feedback manually
 aws lambda invoke \\  
   --function-name sam-app-SubmitReviewFunction-0UnenRXP12Vv \\  
