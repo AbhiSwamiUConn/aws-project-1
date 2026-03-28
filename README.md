@@ -1,10 +1,12 @@
 # aws-project-1
-install aws cli before using the instructions provided here: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+install aws cli before using the instructions provided here: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html  
 # paste the following into a terminal
 aws login  
 python3 -m venv venv  
 source venv/bin/activate  
 pip install -r requirements.txt  
+sam build  
+sam deploy  
 # Submit file for review
 aws s3 cp {insert_json_or_csv_file} s3://sam-app-feedbackbucket-6l36mzbhlexz/incoming/{json_or_csv_file}
 # Review feedback manually
