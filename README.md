@@ -1,5 +1,8 @@
 # aws-project-1
-# requirements 
+install aws cli before using the instructions provided here: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+aws login
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 # Submit file for review
 aws s3 cp {insert_json_or_csv_file} s3://sam-app-feedbackbucket-6l36mzbhlexz/incoming/{json_or_csv_file}
@@ -13,3 +16,4 @@ aws lambda invoke \\
     "reviewer": "insert_email_address"
   }' \\
   response.json
+# Example input files provided
