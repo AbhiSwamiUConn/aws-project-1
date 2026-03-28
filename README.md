@@ -17,4 +17,4 @@ aws lambda invoke \\
     "reviewer": "insert_email_address"
   }' \\
   response.json
-# Example input files provided
+# Example input files in repo
