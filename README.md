@@ -21,4 +21,3 @@ aws lambda invoke \\
   }' \\  
   response.json  
 # Example input files in repo
-This is a test to see how the lambda handles multiple webhook requests
